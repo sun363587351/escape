@@ -32,6 +32,7 @@ var skipCache, skipPush bool
 var skipDeploy, skipSmoke bool
 var skipDestroyBuild, skipDestroyDeploy, skipDestroy bool
 var skipIfExists bool
+var to, toDeployment string
 
 var runCmd = &cobra.Command{
 	Use:   "run",
@@ -171,6 +172,57 @@ var runTestCmd = &cobra.Command{
 	},
 }
 
+var runPromoteCmd = &cobra.Command{
+	Use:   "promote",
+	Short: "Run a promotion of package from one environment to another",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		loadLocalEscapePlan := len(args) == 0
+		if err := ProcessFlagsForContext(loadLocalEscapePlan); err != nil {
+			return err
+		}
+
+		env := context.GetEnvironmentState()
+
+		if release := env.Deployments[context.GetRootDeploymentName()]; release == nil {
+			return fmt.Errorf("Package %s not found", context.GetRootDeploymentName())
+		}
+
+		if deployStage := env.Deployments[context.GetRootDeploymentName()].Stages["deploy"]; deployStage == nil {
+			return fmt.Errorf("No release stage on target package %s not found", context.GetRootDeploymentName())
+		}
+
+		version := env.Deployments[context.GetRootDeploymentName()].Stages["deploy"].Version
+		if version == "" {
+			return fmt.Errorf("Version not found on target package %s deployment stage", context.GetRootDeploymentName())
+		}
+
+		releaseId := fmt.Sprintf("%s-v%s", env.Deployments[context.GetRootDeploymentName()].Release, version)
+
+		ctrl := controllers.DeployController{}
+		parsedExtraVars, err := ParseExtraVars(extraVars)
+		if err != nil {
+			return err
+		}
+
+		parsedExtraProviders, err := ParseExtraVars(extraProviders)
+		if err != nil {
+			return err
+		}
+
+		environment = to
+		if toDeployment != "" {
+			deployment = toDeployment
+		}
+
+		ProcessFlagsForContext(loadLocalEscapePlan)
+		if err := ctrl.FetchAndDeploy(context, releaseId, parsedExtraVars, parsedExtraProviders); err != nil {
+			return err
+		}
+
+		return nil
+	},
+}
+
 func init() {
 	RootCmd.AddCommand(runCmd)
 
@@ -220,4 +272,9 @@ func init() {
 
 	runCmd.AddCommand(runTestCmd)
 	setPlanAndStateFlags(runTestCmd)
+
+	runCmd.AddCommand(runPromoteCmd)
+	setPlanAndStateFlags(runPromoteCmd)
+	runPromoteCmd.Flags().StringVarP(&to, "to", "", "", "The logical environment to promote to")
+	runPromoteCmd.Flags().StringVarP(&toDeployment, "to-deployment", "", "", "The deployment name to promote to (default is the package's \"project/name\")")
 }
